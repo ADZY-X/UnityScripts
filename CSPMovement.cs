@@ -12,14 +12,10 @@ public class PlayerMovement : MovementEntity
     [SerializeField]
     private float jumpForce = 5f;
     [SerializeField]
-    private float maxSpeed = 5f;
-    [SerializeField]
     private LayerMask groundLayer;
     private Vector3 forceDirection = Vector3.zero;
     private Vector2 move;
     private bool pressedJump;
-    private bool isFalling;
-    private bool canMove;
     private bool isGrounded;
     private Vector3 yaw, pitch;
 
@@ -53,13 +49,32 @@ public class PlayerMovement : MovementEntity
 
         isGrounded = Physics.CheckSphere(transform.position - new Vector3(0, 0, 0), 0.25f, groundLayer);
 
+        if (pressedJump && isGrounded)
+        {
+            rb.AddForce(new Vector3(0, jumpForce, 0), ForceMode.Impulse);
+            animator.SetBool("IsJumping", true);
+        }
+        else
+        {
+            animator.SetBool("IsJumping", false);
+        }
+
+        if (!isGrounded)
+        {
+            animator.SetBool("IsFalling", true);
+        }
+        else
+        {
+            animator.SetBool("IsFalling", false);
+        }
+
         Vector3 direction = rb.velocity;
         direction.y = 0f;
 
         if (move.sqrMagnitude > 0.1f && direction.sqrMagnitude > 0.1f)
         {
             Quaternion toRotate = Quaternion.LookRotation(direction, Vector3.up);
-            this.rb.rotation = Quaternion.RotateTowards(rb.rotation, toRotate, 20f);
+            this.rb.rotation = Quaternion.RotateTowards(rb.rotation, toRotate, 30f);
         }
         else
         {
