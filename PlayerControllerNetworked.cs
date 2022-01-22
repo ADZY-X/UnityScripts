@@ -1,168 +1,163 @@
 using UnityEngine;
 using Mirror;
-using System.Collections;
+using Black.ClientSidePrediction;
+using System;
 
-public class PlayerController : NetworkBehaviour
+public class PlayerMovement : MovementEntity
 {
     [Header("Tweakables:")]
-    [SerializeField]
-    private float movementForce = 1f;
-    [SerializeField]
-    private float jumpForce = 5f;
-    [SerializeField]
-    private float maxSpeed = 5f;
-    private float timeGrounded;
+    [SerializeField] private float movementForce = 1f;
+    [SerializeField] private float jumpForce = 5f;
+    [SerializeField] private LayerMask groundLayer;
 
-    [SerializeField]
-    private LayerMask groundLayer;
+    [SerializeField] private ParticleSystem jumpParticle;
+    [SerializeField] private AudioClip jumpSound;
+    private AudioSource audioSource;
+
     private Vector3 forceDirection = Vector3.zero;
     private Vector2 move;
-    [SyncVar]
-    private bool isJumping;
-    [SyncVar]
-    private bool isFalling;
-    private bool canMove;
+    private Vector3 yaw, pitch;
+
+    private bool pressedJump;
+    private bool isGrounded;
 
     private Camera playerCamera;
     private Animator animator;
     private Rigidbody rb;
 
-    void Start()
+    protected override void Start()
     {
         rb = this.GetComponent<Rigidbody>();
         animator = this.GetComponent<Animator>();
         playerCamera = GameObject.FindObjectOfType<Camera>();
-        canMove = true;
+        audioSource = GetComponent<AudioSource>();
+        base.Start();
     }
 
-    private void Update()
+    public override void OnStartAuthority()
     {
-        if (!isLocalPlayer) { return; }
-
-        move.x = Input.GetAxis("Horizontal");
-        move.y = Input.GetAxis("Vertical");
-
-        if (!canMove)
+        if (!isServer)
         {
-            move = Vector3.zero;
-        }
-
-        if (Input.GetButtonDown("Jump") && IsGrounded() && canMove)
-        {
-            isJumping = true;
-            animator.SetBool("IsJumping", isJumping);
+            GetComponent<NetworkTransform>().enabled = false;
         }
     }
 
-    void FixedUpdate()
+    public override void ApplyMovement()
     {
-        if (!isLocalPlayer) { return; }
-        CmdMovePlayer(move, GetCameraRight(playerCamera), GetCameraForward(playerCamera));
+        Movement();
 
-        if (isJumping)
+        Jump();
+
+        Respawn();
+
+        LookDirection();
+    }
+
+    private void Movement()
+    {
+        forceDirection += move.x * yaw * movementForce;
+        forceDirection += move.y * pitch * movementForce;
+
+        rb.AddForce(forceDirection, ForceMode.VelocityChange);
+        forceDirection = Vector3.zero;
+
+        if (rb.velocity.magnitude > 5)
         {
-            CmdJump(isJumping);
-            isJumping = false;
-            animator.SetBool("IsJumping", isJumping);
+            rb.velocity = rb.velocity.normalized * 5;
         }
+    }
 
-        if (!IsGrounded())
+    private void Jump()
+    {
+        isGrounded = Physics.CheckSphere(transform.position + new Vector3(0, 0, 0), 0.1f, groundLayer);
+
+        if (pressedJump && isGrounded)
         {
-            isFalling = true;
-            animator.SetBool("IsFalling", isFalling);
+            if (isLocalPlayer)
+            {
+                CmdJumpEffects();
+            }
+            rb.AddForce(Vector3.up * jumpForce, ForceMode.Impulse);
+            animator.SetBool("IsJumping", true);
         }
         else
         {
-            isFalling = false;
-            animator.SetBool("IsFalling", isFalling);
+            rb.AddForce(Physics.gravity * 1.2f);
+            animator.SetBool("IsJumping", false);
         }
 
-        CmdLookAt(move);
-    }
-
-    [Server]
-    private Vector3 CalculateMovement(float x, float y, Vector3 camRight, Vector3 camForward)
-    {
-        forceDirection += x * camRight * movementForce;
-        forceDirection += y * camForward * movementForce;
-
-        return forceDirection;
-    }
-
-    [Client]
-    private Vector3 CalculateLocalMovement(float x, float y, Vector3 camRight, Vector3 camForward)
-    {
-        forceDirection += x * camRight * movementForce;
-        forceDirection += y * camForward * movementForce;
-
-        return forceDirection;
-    }
-
-    [Server]
-    private Vector3 CalculateJumpForce()
-    {
-        return new Vector3(0, jumpForce, 0);
-    }
-
-    [Client]
-    private Vector3 CalculateLocalJumpForce()
-    {
-        return new Vector3(0, jumpForce, 0);
-    }
-
-    [Command]
-    private void CmdMovePlayer(Vector2 move, Vector3 cameraRight, Vector3 cameraForward)
-    {
-        if (CalculateMovement(move.x, move.y, cameraRight, cameraForward) != CalculateLocalMovement(move.x, move.y, cameraRight, cameraForward))
+        if (!isGrounded)
         {
-            rb.AddForce(CalculateMovement(move.x, move.y, cameraRight, cameraForward), ForceMode.Impulse);
-            forceDirection = Vector3.zero;
+            animator.SetBool("IsFalling", true);
         }
         else
         {
-            rb.AddForce(CalculateLocalMovement(move.x, move.y, cameraRight, cameraForward), ForceMode.Impulse);
-            forceDirection = Vector3.zero;
-        }
-
-        Vector3 horizontalVelocity = rb.velocity;
-        horizontalVelocity.y = 0;
-        if (horizontalVelocity.sqrMagnitude > maxSpeed * maxSpeed)
-        {
-            rb.velocity = horizontalVelocity.normalized * maxSpeed + Vector3.up * rb.velocity.y;
+            animator.SetBool("IsFalling", false);
         }
     }
 
-    [Command]
-    private void CmdJump(bool jumping)
+    private void Respawn()
     {
-        if (!jumping) return;
-        if (CalculateJumpForce() != CalculateLocalJumpForce())
+        if (transform.position.y < -5)
         {
-            rb.AddForce(CalculateJumpForce(), ForceMode.Impulse);
+            transform.position = Vector3.zero;
+            transform.rotation = Quaternion.identity;
         }
-        else
-        {
-            rb.AddForce(CalculateLocalJumpForce(), ForceMode.Impulse);
-        }
-        
-        isJumping = false;
     }
 
-    [Command]
-    private void CmdLookAt(Vector2 move)
+    private void LookDirection()
     {
         Vector3 direction = rb.velocity;
         direction.y = 0f;
 
-        if (move.sqrMagnitude > 0.1f && direction.sqrMagnitude > 0.1f)
+        if (direction != Vector3.zero)
         {
-            Quaternion toRotate = Quaternion.LookRotation(direction, Vector3.up);
-            this.rb.rotation = Quaternion.RotateTowards(rb.rotation, toRotate, 20f);
+            Quaternion toRotation = Quaternion.LookRotation(direction, Vector3.up);
+            rb.rotation = Quaternion.RotateTowards(rb.rotation, toRotation, 720 * Time.deltaTime);
         }
-        else
-        { 
-            rb.angularVelocity = Vector3.zero;
-        }
+    }
+
+    public override ServerResult GetResult()
+    {
+        var state = new ServerResult
+        {
+            Position = transform.localPosition,
+            Rotation = transform.localRotation,
+            Velocity = rb.velocity,
+            IsGrounded = isGrounded,
+        };
+
+        return state;
+    }
+
+    public override void SetInput(ClientInput input)
+    {
+        move.x = input.Horizontal;
+        move.y = input.Vertical;
+        yaw = input.Yaw;
+        pitch = input.Pitch;
+        pressedJump = input.Jump;
+    }
+    protected override ClientInput GetInput()
+    {
+        var input = new ClientInput
+        {
+            Horizontal = Input.GetAxisRaw("Horizontal"),
+            Vertical = Input.GetAxisRaw("Vertical"),
+            Yaw = GetCameraRight(playerCamera),
+            Pitch = GetCameraForward(playerCamera),
+            Jump = Input.GetButtonDown("Jump")
+        };
+
+        return input;
+    }
+
+    protected override void SetResult(ServerResult result)
+    {
+        transform.localPosition = result.Position;
+        transform.localRotation = result.Rotation;
+        rb.velocity = result.Velocity;
+        isGrounded = result.IsGrounded;
     }
 
     private Vector3 GetCameraForward(Camera playerCamera)
@@ -179,13 +174,22 @@ public class PlayerController : NetworkBehaviour
         return right.normalized;
     }
 
-    private bool IsGrounded()
-    {
-        return Physics.CheckSphere(transform.position - new Vector3(0, 0, 0), 0.25f, groundLayer);
-    }
-
     private void OnDrawGizmos()
     {
-        Gizmos.DrawSphere(transform.position - new Vector3(0, 0, 0) , 0.25f);
+        Gizmos.DrawSphere(transform.position + new Vector3(0, 0.05f, 0), 0.1f);
+    }
+
+    [Command]
+    private void CmdJumpEffects()
+    {
+        if (!isServer) { return; }
+        RpcJumpEffects();
+    }
+
+    [ClientRpc]
+    private void RpcJumpEffects()
+    {
+        audioSource.PlayOneShot(jumpSound);
+        ParticleSystem jp = Instantiate(jumpParticle, transform.position, transform.rotation * Quaternion.Euler(90f, 0f, 0f));
     }
 }
